@@ -37,6 +37,7 @@
 #include <eduos/stdio.h>
 #include <eduos/processor.h>
 #include <eduos/vma.h>
+#include <asm/mm.h>
 
 
 /* Signature of RSDP */
@@ -100,17 +101,6 @@ print_acpi_header(acpi_sdt_header_t* hdr)
 			hdr->creator_id[2],
 			hdr->creator_id[3]);
 	kprintf("  Creator rev: %u\n", hdr->creater_revision);
-}
-
-// ----------------------------------------------------------------------------
-
-/* Identity map memory. Will be moved to to a more general place later */
-static void
-map_address(void* adr)
-{
-	size_t page = (size_t) adr & PAGE_MASK;
-	page_map(page, page, 1, PG_GLOBAL | PG_RW | PG_PCD);
-	vma_add(page, page + PAGE_SIZE, VMA_READ|VMA_WRITE);
 }
 
 // ----------------------------------------------------------------------------
@@ -252,7 +242,7 @@ parse_rsdt(acpi_rsdt_t* rsdt)
 	for(i = 0; i < entry_count; i++)
 	{
 		acpi_sdt_header_t* entry = (acpi_sdt_header_t*)rsdt->entry[i];
-		map_address(entry);
+		kmmap_identity((size_t) entry, VMA_READ | VMA_WRITE);
 
 		/* Cast signature for easier output */
 		char* sig = (char*) &entry->signature;
@@ -306,7 +296,7 @@ rsdp_found:
 	acpi_rsdt_t* rsdt = (acpi_rsdt_t*) rsdp->rsdt_adr;
 
 	/* Map page holding RSDT table */
-	map_address(rsdt);
+	kmmap_identity((size_t) rsdt, VMA_READ | VMA_WRITE);
 
 	if(acpi_checksum(&rsdt->header, rsdt->header.length) != 0)
 	{
