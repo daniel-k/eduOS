@@ -55,8 +55,11 @@ extern "C" {
 #define VMA_NO_ACCESS	(1 << 4)
 /// This VMA should be part of the userspace
 #define VMA_USER	(1 << 5)
+/// Combine read and write
+#define VMA_RW		(VMA_READ|VMA_WRITE)
 /// A collection of flags used for the kernel heap (kmalloc)
-#define VMA_HEAP	(VMA_READ|VMA_WRITE|VMA_CACHEABLE)
+#define VMA_HEAP	(VMA_RW|VMA_CACHEABLE)
+
 
 // boundaries for VAS allocation
 #define VMA_KERN_MIN	0xC0000
