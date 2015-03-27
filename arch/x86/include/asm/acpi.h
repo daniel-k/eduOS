@@ -163,7 +163,11 @@ typedef struct {
 
 // ----------------------------------------------------------------------------
 
-void acpi_init();
+int acpi_init();
+
+acpi_rsdp_t* get_acpi_rsdp(void);
+acpi_rsdt_t* get_acpi_rsdt(void);
+acpi_madt_t* get_acpi_madt(void);
 
 #ifdef __cplusplus
 }

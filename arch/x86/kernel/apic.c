@@ -41,6 +41,8 @@
 #include <asm/page.h>
 #include <asm/apic.h>
 #include <asm/multiboot.h>
+#include <asm/acpi.h>
+#include <asm/mm.h>
 
 /*
  * Note that linker symbols are not variables, they have no memory allocated for
@@ -59,13 +61,14 @@ typedef struct {
 } ioapic_t;
 
 #ifndef MAX_CORES
-#define MAX_CORES	1
+#define MAX_CORES	16
 #endif
 
-static const apic_processor_entry_t* apic_processors[MAX_CORES] = {[0 ... MAX_CORES-1] = NULL};
+static const mp_processor_entry_t* mp_apic_processors[MAX_CORES] = {[0 ... MAX_CORES-1] = NULL};
+static apic_processor_t apic_processors[MAX_CORES]; /*  = {[0 ... MAX_CORES-1] = NULL}; */
 static uint32_t boot_processor = MAX_CORES;
-apic_mp_t* apic_mp  __attribute__ ((section (".data"))) = NULL;
-static apic_config_table_t* apic_config = NULL;
+mp_fps_t* mp_fps  __attribute__ ((section (".data"))) = NULL;
+static mp_config_table_t* apic_config = NULL;
 static size_t lapic = 0;
 static volatile ioapic_t* ioapic = NULL;
 static uint32_t icr = 0;
@@ -228,12 +231,12 @@ int apic_enable_timer(void)
 	return -EINVAL;
 }
 
-static apic_mp_t* search_mptable(size_t base, size_t limit) {
+static mp_fps_t* search_mptable(size_t base, size_t limit) {
 	size_t ptr=PAGE_CEIL(base), vptr=0;
-	apic_mp_t* tmp;
+	mp_fps_t* tmp;
 	uint32_t i;
 
-	while(ptr<=limit-sizeof(apic_mp_t)) {
+	while( ptr <= (limit - sizeof(mp_fps_t)) ) {
 		if (vptr) {
 			// unmap page via mapping a zero page
 			page_unmap(vptr, 1);
@@ -245,10 +248,11 @@ static apic_mp_t* search_mptable(size_t base, size_t limit) {
 		else
 			return NULL;
 
-		for(i=0; (vptr) && (i<PAGE_SIZE-sizeof(apic_mp_t)); i+=4, vptr+=4) {
-			tmp = (apic_mp_t*) vptr;
+		for(i=0; (vptr) && (i<PAGE_SIZE-sizeof(mp_fps_t)); i+=4, vptr+=4) {
+			tmp = (mp_fps_t*) vptr;
+
 			if (tmp->signature == MP_FLT_SIGNATURE) {
-				if (!((tmp->version > 4) || (tmp->features[0]))) {
+				if (!((tmp->version > 4 || (tmp->features[0])))) {
 					vma_add(ptr & PAGE_MASK, (ptr & PAGE_MASK) + PAGE_SIZE, VMA_READ|VMA_WRITE);
 					return tmp;
 				}
@@ -343,9 +347,9 @@ int apic_calibration(void)
 		// now lets turn everything else on
 		for(i=0; i<=max_entry; i++)
 			if (i != 2)
-				ioapic_inton(i, apic_processors[boot_processor]->id);
+				ioapic_inton(i, mp_apic_processors[boot_processor]->id);
 		// now, we don't longer need the IOAPIC timer and turn it off
-		ioapic_intoff(2, apic_processors[boot_processor]->id);
+		ioapic_intoff(2, mp_apic_processors[boot_processor]->id);
 	}
 
 	initialized = 1;
@@ -354,50 +358,72 @@ int apic_calibration(void)
 	return 0;
 }
 
-static int apic_probe(void)
+/* Search at various place for MP Floating Pointer Structure */
+static mp_fps_t*
+mp_get_fps()
+{
+	/* The Linux kernel also searches at 0x0 */
+	mp_fps = search_mptable(0x0, 0x400);
+	if (mp_fps)
+		return mp_fps;
+
+	/* First kilobyte of Extended BIOS Data Area (for systems with 640KB lower mem) */
+	mp_fps = search_mptable(0x9FC00, 0xA0000);
+	if (mp_fps)
+		return mp_fps;
+
+	/* BIOS ROM address space between 0xF0000 and 0xFFFFF */
+	mp_fps = search_mptable(0xF0000, 0x100000);
+	if (mp_fps)
+		return mp_fps;
+
+	return NULL;
+}
+
+/* @brief Parse MP Floating Pointer Structure
+ *
+ * Alters the following global variables:
+ *   - apic_processors
+ *   - boot_processor
+ *   - ioapic
+ *   - irq_redirect
+ *   - ncores
+ */
+static int
+mp_parse_fps(mp_fps_t* mp_fps)
 {
 	size_t addr;
-	uint32_t i, j, count;
+	uint32_t i, k, count;
 	int isa_bus = -1;
 
-	apic_mp = search_mptable(0xF0000, 0x100000);
-	if (apic_mp)
-		goto found_mp;
-	apic_mp = search_mptable(0x9F000, 0xA0000);
-	if (apic_mp)
-		goto found_mp;
+	/* Print features */
+	kprintf("Found MP config table at 0x%x\n", mp_fps->mp_config);
+	kprintf("System uses Multiprocessing Specification 1.%u\n", mp_fps->version);
+	kprintf("MP features 1: %u\n", mp_fps->features[0]);
 
-found_mp:
-	if (!apic_mp)
-		goto no_mp;
-
-	kprintf("Found MP config table at 0x%x\n", apic_mp->mp_config);
-	kprintf("System uses Multiprocessing Specification 1.%u\n", apic_mp->version);
-	kprintf("MP features 1: %u\n", apic_mp->features[0]);
-
-	if (apic_mp->features[0]) {
+	if (mp_fps->features[0]) {
 		kputs("Currently, eduOS supports only multiprocessing via the MP config tables!\n");
-		goto no_mp;
+		return -ENOTSUP;
 	}
 
-	if (apic_mp->features[1] & 0x80)
+	if (mp_fps->features[1] & 0x80)
 		kputs("PIC mode implemented\n");
 	else
 		kputs("Virtual-Wire mode implemented\n");
 
-	apic_config = (apic_config_table_t*) ((size_t) apic_mp->mp_config);
-	if (((size_t) apic_config & PAGE_MASK) != ((size_t) apic_mp & PAGE_MASK)) {
-		page_map((size_t) apic_config & PAGE_MASK,  (size_t) apic_config & PAGE_MASK, 1, PG_GLOBAL | PG_RW | PG_PCD);
-		vma_add( (size_t) apic_config & PAGE_MASK, ((size_t) apic_config & PAGE_MASK) + PAGE_SIZE, VMA_READ|VMA_WRITE);
-	}
 
+	/* Get MP Config Table and map into memory*/
+	apic_config = (mp_config_table_t*) ((size_t) mp_fps->mp_config);
+	kmmap_identity((size_t) apic_config, VMA_RW);
+
+	/* Check MP Config Table for validity */
 	if (!apic_config || strncmp((void*) &apic_config->signature, "PCMP", 4) !=0) {
 		kputs("Invalid MP config table\n");
-		goto no_mp;
+		return -EBADMSG;
 	}
 
 	addr = (size_t) apic_config;
-	addr += sizeof(apic_config_table_t);
+	addr += sizeof(mp_config_table_t);
 
 	// search the ISA bus => required to redirect the IRQs
 	for(i=0; i<apic_config->entry_count; i++) {
@@ -406,9 +432,9 @@ found_mp:
 			addr += 20;
 			break;
 		case 1: {
-				apic_bus_entry_t* mp_bus;
+				mp_bus_entry_t* mp_bus;
 
-				mp_bus = (apic_bus_entry_t*) addr;
+				mp_bus = (mp_bus_entry_t*) addr;
 				if (mp_bus->name[0] == 'I' && mp_bus->name[1] == 'S' &&
 				    mp_bus->name[2] == 'A')
 					isa_bus = i;
@@ -421,19 +447,24 @@ found_mp:
 	}
 
 	addr = (size_t) apic_config;
-	addr += sizeof(apic_config_table_t);
+	addr += sizeof(mp_config_table_t);
 
-	for(i=0, j=0, count=0; i<apic_config->entry_count; i++) {
-		if (*((uint8_t*) addr) == 0) { // cpu entry
-			apic_processor_entry_t* cpu = (apic_processor_entry_t*) addr;
+	for(i=0, k=0, count=0; i<apic_config->entry_count; i++) {
+		if (*((uint8_t*) addr) == 0) { // Processor
+			mp_processor_entry_t* cpu = (mp_processor_entry_t*) addr;
 
-			if (j < MAX_CORES) {
+			if (k < MAX_CORES) {
 				 // is the processor usable?
 				if (cpu->cpu_flags & 0x01) {
-					apic_processors[j] = cpu;
+					mp_apic_processors[k] = cpu;
+
+					apic_processors[k].id = k;
+					apic_processors[k].lapic_id = cpu->id;
+					apic_processors[k].enabled = cpu->cpu_flags & 0x01;
+
 					if (cpu->cpu_flags & 0x02)
-						boot_processor = j;
-					j++;
+						boot_processor = k;
+					k++;
 				}
 			}
 
@@ -441,30 +472,65 @@ found_mp:
 				count++;
 			addr += 20;
 		} else if (*((uint8_t*) addr) == 2) { // IO_APIC
-			apic_io_entry_t* io_entry = (apic_io_entry_t*) addr;
+			mp_io_apic_entry_t* io_entry = (mp_io_apic_entry_t*) addr;
+
+			/* Get IO APIC address and map it to IOAPIC_ADDR */
 			ioapic = (ioapic_t*) ((size_t) io_entry->addr);
+			kmap_page((size_t)ioapic & PAGE_MASK, IOAPIC_ADDR, VMA_RW);
 			kprintf("Found IOAPIC at 0x%x\n", ioapic);
-			page_map(IOAPIC_ADDR, (size_t)ioapic & PAGE_MASK, 1, PG_GLOBAL | PG_RW | PG_PCD);
-			vma_add(IOAPIC_ADDR, IOAPIC_ADDR + PAGE_SIZE, VMA_READ|VMA_WRITE);
+
 			ioapic = (ioapic_t*) IOAPIC_ADDR;
-			addr += 8;
 			kprintf("Map IOAPIC to 0x%x\n", ioapic);
+
+			addr += 8;
+
 		} else if (*((uint8_t*) addr) == 3) { // IO_INT
-			apic_ioirq_entry_t* extint = (apic_ioirq_entry_t*) addr;
+			mp_ioirq_entry_t* extint = (mp_ioirq_entry_t*) addr;
+
 			if (extint->src_bus == isa_bus) {
 				irq_redirect[extint->src_irq] = extint->dest_intin;
 				kprintf("Redirect irq %u -> %u\n", extint->src_irq,  extint->dest_intin);
 			}
+
 			addr += 8;
 		} else addr += 8;
 	}
+
 	kprintf("Found %u cores\n", count);
 
 	if (count > MAX_CORES) {
 		kputs("Found too many cores! Increase the macro MAX_CORES!\n");
-		goto no_mp;
+		// TODO: this might not be the best choice for error number
+		return -ENXIO;
 	}
 	ncores = count;
+
+	return 0;
+}
+
+
+static int apic_probe(void)
+{
+
+	/* There are 2 possibilities for getting information about processors and
+	 * their APIC configurations:
+	 *  1. ACPI
+	 *  2. Intel MultiProcessor Specification (older, fallback)
+	 */
+
+	/* Try ACPI first, because this is the more recent specification*/
+	if(0 && acpi_init() == 0)	// disabled for now
+	{
+		// TODO: implement ACPI parsing
+		goto check_lapic;
+	}
+
+	/* Intel MultiProcessor Specification is fallback */
+	if( ( mp_fps = mp_get_fps() ) && (mp_parse_fps(mp_fps) == 0) )
+		goto check_lapic;
+
+	// Neither found
+	goto no_mp;
 
 check_lapic:
 	if (apic_config)
@@ -504,14 +570,14 @@ check_lapic:
 	return 0;
 
 out:
-	apic_mp = NULL;
+	mp_fps = NULL;
 	apic_config = NULL;
 	lapic = 0;
 	ncores = 1;
 	return -ENXIO;
 
 no_mp:
-	apic_mp = NULL;
+	mp_fps = NULL;
 	apic_config = NULL;
 	ncores = 1;
 	goto check_lapic;
@@ -532,7 +598,7 @@ int apic_init(void)
 
 	// set APIC error handler
 	irq_install_handler(126, apic_err_handler);
-	kprintf("Boot processor %u (ID %u)\n", boot_processor, apic_processors[boot_processor]->id);
+	kprintf("Boot processor %u (ID %u)\n", boot_processor, apic_processors[boot_processor].id);
 
 	return 0;
 }

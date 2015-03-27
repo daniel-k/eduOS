@@ -38,6 +38,11 @@
 #include <eduos/processor.h>
 #include <eduos/vma.h>
 #include <asm/mm.h>
+#include <eduos/errno.h>
+
+acpi_rsdp_t* acpi_rsdp __attribute__ ((section (".data"))) = NULL;
+acpi_rsdt_t* acpi_rsdt __attribute__ ((section (".data"))) = NULL;
+acpi_madt_t* acpi_madt __attribute__ ((section (".data"))) = NULL;
 
 
 /* Signature of RSDP */
@@ -108,8 +113,6 @@ print_acpi_header(acpi_sdt_header_t* hdr)
 static acpi_rsdp_t*
 search_rdsp(size_t base, size_t limit)
 {
-	kprintf("Searching ACPI RSDP table at 0x%x - 0x%x\n", base, limit);
-
 	size_t ptr=PAGE_CEIL(base), vptr=0;
 	acpi_rsdp_t* tmp;
 	uint32_t i;
@@ -133,10 +136,8 @@ search_rdsp(size_t base, size_t limit)
 
 			if(sig[0] == acpi_sig.u32[0] && sig[1] == acpi_sig.u32[1])
 			{
-				kputs("Signature found!\n");
 				if(acpi_checksum(tmp, 20) == 0)
 				{
-					kputs("Checksum correct!\n");
 					vma_add(ptr & PAGE_MASK, (ptr & PAGE_MASK) + PAGE_SIZE, VMA_READ|VMA_WRITE);
 					return tmp;
 				}
@@ -154,11 +155,11 @@ search_rdsp(size_t base, size_t limit)
 
 // ----------------------------------------------------------------------------
 
-static void
+static int
 parse_madt(acpi_madt_t* madt)
 {
 	if(!madt)
-		return;
+		return -ENOENT;
 
 	print_acpi_header((acpi_sdt_header_t*) madt);
 
@@ -175,7 +176,6 @@ parse_madt(acpi_madt_t* madt)
 	acpi_madt_irq_source_override_entry_t* irq_source_override;
 
 	unsigned int i = 0;
-
 	while( (__builtin_offsetof(acpi_madt_t, apic_structs) + i) < madt->header.length)
 	{
 		/* Get pointer to current entry */
@@ -225,24 +225,33 @@ parse_madt(acpi_madt_t* madt)
 
 		i += entry->length;
 	}
+
+	return 0;
 }
 
 // ----------------------------------------------------------------------------
 
-static void
+/* @brief Parse tables referencend in RSDT
+ *
+ * @param rsdt  Pointer to RSDT table
+ * @return      0 if all tables are successfully parsed, error code otherwise
+ */
+static int
 parse_rsdt(acpi_rsdt_t* rsdt)
 {
 	if(!rsdt)
-		return;
+		return -ENOENT;
 
 	/* Entries are 32 bit physical addresses that point to sub tables */
 	uint32_t entry_count = (rsdt->header.length - sizeof(acpi_sdt_header_t)) / sizeof(uint32_t);
 
+	int ret = 0;
 	uint32_t i;
-	for(i = 0; i < entry_count; i++)
+	for(i = 0; i < entry_count && ret == 0; i++)
 	{
+		/* Get current entry and map it */
 		acpi_sdt_header_t* entry = (acpi_sdt_header_t*)rsdt->entry[i];
-		kmmap_identity((size_t) entry, VMA_READ | VMA_WRITE);
+		kmmap_identity((size_t) entry, VMA_RW);
 
 		/* Cast signature for easier output */
 		char* sig = (char*) &entry->signature;
@@ -253,57 +262,88 @@ parse_rsdt(acpi_rsdt_t* rsdt)
 			continue;
 		}
 
-		acpi_madt_t* madt;
-
 		switch(entry->signature)
 		{
 		case MADT_SIGNATURE:
-			madt = (acpi_madt_t*) entry;
-			parse_madt(madt);
+			acpi_madt = (acpi_madt_t*) entry;
+			ret = parse_madt(acpi_madt);
 			break;
 
 		default:
-			kprintf("Found table '%c%c%c%c', not yet implemented\n", sig[0], sig[1], sig[2], sig[3]);
+			// not yet implemented
+			//kprintf("Found table '%c%c%c%c', not yet implemented\n", sig[0], sig[1], sig[2], sig[3]);
 			break;
 		}
 	}
+
+	/* We have to find the MADT, otherwise fail */
+	if(!acpi_madt)
+		return -ENOENT;
+
+	return 0;
+}
+
+// ----------------------------------------------------------------------------
+
+acpi_rsdt_t*
+get_acpi_rsdt(void)
+{
+	return acpi_rsdt;
+}
+
+// ----------------------------------------------------------------------------
+
+acpi_madt_t*
+get_acpi_madt(void)
+{
+	return acpi_madt;
+}
+
+// ----------------------------------------------------------------------------
+
+acpi_rsdp_t*
+get_acpi_rsdp(void)
+{
+	if(acpi_rsdp)
+		return acpi_rsdp;
+
+	if( (acpi_rsdp = search_rdsp(EBDA_ADDRESS, EBDA_LIMIT)) )
+		return acpi_rsdp;
+
+	if( (acpi_rsdp = search_rdsp(BIOS_ROM_ADDRESS, BIOS_ROM_LIMIT)) )
+		return acpi_rsdp;
+
+	// No RSDP found
+	return NULL;
 }
 
 // ----------------------------------------------------------------------------
 
 /*
- * TODO: Return codes!
+ * @brief Search ACPI structures and scan for relevant tables
+ *
  * TODO: Maybe parse XSDT instead of RSDT
  */
-void
+int
 acpi_init()
 {
-	acpi_rsdp_t* rsdp;
+	if(!get_acpi_rsdp())
+		return -ENOENT;
 
-	if( (rsdp = search_rdsp(EBDA_ADDRESS, EBDA_LIMIT)) )
-		goto rsdp_found;
-	if( (rsdp = search_rdsp(BIOS_ROM_ADDRESS, BIOS_ROM_LIMIT)) )
-		goto rsdp_found;
+	kprintf("Host supports ACPI rev. %u.0\n", acpi_rsdp->revision + 1);
 
-	// no ACPI tables found
-	kputs("No ACPI tables found\n");
-	return;
+	/* Get RSDT table and map page containing it */
+	acpi_rsdt = (acpi_rsdt_t*) acpi_rsdp->rsdt_adr;
+	kmmap_identity((size_t) acpi_rsdt, VMA_RW);
 
-rsdp_found:
-
-	kprintf("Host supports ACPI rev. %u.0\n", rsdp->revision + 1);
-
-	acpi_rsdt_t* rsdt = (acpi_rsdt_t*) rsdp->rsdt_adr;
-
-	/* Map page holding RSDT table */
-	kmmap_identity((size_t) rsdt, VMA_READ | VMA_WRITE);
-
-	if(acpi_checksum(&rsdt->header, rsdt->header.length) != 0)
+	/* Validate checksum of RSDT */
+	if(acpi_checksum(&acpi_rsdt->header, acpi_rsdt->header.length) != 0)
 	{
 		kputs("Bad RSDT checksum!\n");
-		return;
+		acpi_rsdt = NULL;
+		return -EBADMSG;
 	}
 
 	/* This will also parse recursively all other ACPI tables */
-	parse_rsdt(rsdt);
+	return parse_rsdt(acpi_rsdt);
 }

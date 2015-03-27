@@ -99,7 +99,21 @@ extern "C" {
 #define APIC_DM_EXTINT		0x00700
 #define APIC_VECTOR_MASK	0x000FF
 
-/** @brief MP Floating Pointer Structure */
+
+typedef struct {
+	uint8_t id;
+	uint8_t lapic_id;
+	uint8_t enabled;
+} __attribute__ ((packed)) apic_processor_t;
+
+
+
+// -------- Intel MultiProcessor Specification --------------------------------
+
+/** @brief MP Floating Pointer Structure
+ *
+ *  See MultiProcessor Specification 1.4, p.39
+ */
 typedef struct {
 	uint32_t signature;
 	uint32_t mp_config;
@@ -107,9 +121,12 @@ typedef struct {
 	uint8_t version;
 	uint8_t checksum;
 	uint8_t features[5];
-} __attribute__ ((packed)) apic_mp_t;
+} __attribute__ ((packed)) mp_fps_t;
 
-/** @brief MP Configuration Table */
+/** @brief MP Configuration Table
+ *
+ *  See MultiProcessor Specification 1.4, p.41
+ */
 typedef struct {
 	uint32_t signature;
 	uint16_t length;
@@ -124,9 +141,12 @@ typedef struct {
 	uint16_t extended_table_length;
 	uint8_t extended_table_checksum;
 	uint8_t reserved;
-} __attribute__ ((packed)) apic_config_table_t;
+} __attribute__ ((packed)) mp_config_table_t;
 
-/** @brief APIC Processor Entry */
+/** @brief Intel MP Processor Entry
+ *
+ *  See MultiProcessor Specification 1.4, p.43
+ */
 typedef struct {
 	uint8_t type;
 	uint8_t id;
@@ -134,25 +154,34 @@ typedef struct {
 	uint8_t cpu_flags;
 	uint32_t cpu_signature;
 	uint32_t cpu_feature;
-} __attribute__ ((packed)) apic_processor_entry_t;
+} __attribute__ ((packed)) mp_processor_entry_t;
 
-/** @brief IO APIC Entry */
+/** @brief Intel MP IO APIC Entry
+ *
+ *  See MultiProcessor Specification 1.4, p.48
+ */
 typedef struct {
 	uint8_t type;
 	uint8_t id;
 	uint8_t version;
 	uint8_t enabled;
 	uint32_t addr;
-} __attribute__ ((packed)) apic_io_entry_t;
+} __attribute__ ((packed)) mp_io_apic_entry_t;
 
-/** @brief Bus Entry */
+/** @brief Intel MP Bus Entry
+ *
+ *  See MultiProcessor Specification 1.4, p.46
+ */
 typedef struct {
 	uint8_t	type;
 	uint8_t	bus_id;
 	char	name[6];
-} __attribute__ ((packed)) apic_bus_entry_t;
+} __attribute__ ((packed)) mp_bus_entry_t;
 
-/** @brief I/O Interrupt Assignment Entry */
+/** @brief Intel MP I/O Interrupt Assignment Entry
+ *
+ *  See MultiProcessor Specification 1.4, p.51
+ */
 typedef struct {
 	uint8_t type;	// type = 3
 	uint8_t itype;	// interrupt type
@@ -161,7 +190,10 @@ typedef struct {
 	uint8_t src_irq;	// source interrupt (from the old bus)
 	uint8_t dest_apic;	// who it gets sent to 0xFF == all
 	uint8_t dest_intin;	// which pin it gets sent to on the IO APIC
-} __attribute__ ((packed)) apic_ioirq_entry_t;
+} __attribute__ ((packed)) mp_ioirq_entry_t;
+
+// ----------------------------------------------------------------------------
+
 
 typedef struct {
 	union {
