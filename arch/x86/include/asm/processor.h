@@ -39,6 +39,7 @@
 #include <eduos/stddef.h>
 #include <asm/gdt.h>
 #include <asm/apic.h>
+#include <asm/acpi.h>
 #include <asm/irqflags.h>
 #ifdef CONFIG_PCI
 #include <asm/pci.h>
@@ -524,6 +525,7 @@ void udelay(uint32_t usecs);
 inline static int system_calibration(void)
 {
 	apic_init();
+	acpi_init();
 	irq_enable();
 	detect_cpu_frequency();
 	apic_calibration();
