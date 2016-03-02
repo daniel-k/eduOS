@@ -347,9 +347,9 @@ int apic_calibration(void)
 		// now lets turn everything else on
 		for(i=0; i<=max_entry; i++)
 			if (i != 2)
-				ioapic_inton(i, mp_apic_processors[boot_processor]->id);
+				ioapic_inton(i, apic_processors[boot_processor].id);
 		// now, we don't longer need the IOAPIC timer and turn it off
-		ioapic_intoff(2, mp_apic_processors[boot_processor]->id);
+		ioapic_intoff(2, apic_processors[boot_processor].id);
 	}
 
 	initialized = 1;
@@ -505,9 +505,71 @@ mp_parse_fps(mp_fps_t* mp_fps)
 	}
 	ncores = count;
 
+	lapic = apic_config->lapic;
+
 	return 0;
 }
 
+
+/*
+ * TODO: move this to acpi.c
+ */
+static int acpi_parse_madt(acpi_madt_t* madt)
+{
+	if(!madt)
+		return -ENOENT;
+
+	lapic = madt->lapic_addr;
+
+
+	int i;
+	acpi_madt_io_apic_entry_t** ioapics = acpi_get_madt_io_apics();
+	acpi_madt_processor_lapic_entry_t** processors = acpi_get_madt_processors();
+	acpi_madt_irq_source_override_entry_t** irqs = acpi_get_irq_overrides();
+
+
+	/* First processor entry is always the boot processor */
+	boot_processor = 0;
+	for(i = 0, ncores = 0; processors[i] != NULL; i++)
+	{
+		apic_processors[i].id = processors[i]->processor_id;
+		apic_processors[i].lapic_id = processors[i]->apic_id;
+		apic_processors[i].enabled = processors[i]->flags.enabled;
+
+		/* Is processor enabled? */
+		if(processors[i]->flags.enabled)
+			ncores++;
+	}
+	kprintf("Found %u enabled cores\n", ncores);
+
+
+	for(i = 0; ioapics[i] != NULL; i++)
+	{
+		ioapic = (ioapic_t*) ioapics[i]->io_apic_adr;
+
+		kmap_page((size_t)ioapic & PAGE_MASK, IOAPIC_ADDR, VMA_RW);
+		kprintf("Found IOAPIC at 0x%x\n", ioapic);
+
+		ioapic = (ioapic_t*) IOAPIC_ADDR;
+		kprintf("Map IOAPIC to 0x%x\n", ioapic);
+
+		if(i > 0)
+		{
+			kputs("Found more than one IO APIC via ACPI. This is still unsupported\n");
+			return -EINVAL;
+		}
+	}
+
+	for(i = 0; irqs[i] != NULL; i++)
+	{
+		kprintf("IRQ redirect %u -> %u\n", irqs[i]->source, irqs[i]->global_irq);
+		irq_redirect[irqs[i]->source] = irqs[i]->global_irq;
+	}
+
+
+
+	return 0;
+}
 
 static int apic_probe(void)
 {
@@ -518,13 +580,12 @@ static int apic_probe(void)
 	 *  2. Intel MultiProcessor Specification (older, fallback)
 	 */
 
-	/* Try ACPI first, because this is the more recent specification*/
-	if(0 && acpi_init() == 0)	// disabled for now
+	/* Try ACPI first, because this is the more recent specification */
+	if( (acpi_init() == 0) && (acpi_parse_madt(acpi_get_madt()) == 0) )
 	{
-		// TODO: implement ACPI parsing
+		kputs("Successfully initialized ACPI\n");
 		goto check_lapic;
 	}
-
 	/* Intel MultiProcessor Specification is fallback */
 	if( ( mp_fps = mp_get_fps() ) && (mp_parse_fps(mp_fps) == 0) )
 		goto check_lapic;
@@ -533,14 +594,14 @@ static int apic_probe(void)
 	goto no_mp;
 
 check_lapic:
-	if (apic_config)
-		lapic = apic_config->lapic;
-	else if (has_apic())
+
+	/* Not sure why this is needed */
+	if (!lapic && has_apic())
 		lapic = 0xFEE00000;
 
 	if (!lapic)
 		goto out;
-	kprintf("Found APIC at 0x%x\n", lapic);
+	kprintf("Found Local APIC at 0x%x\n", lapic);
 
 	if (has_x2apic()) {
 		kprintf("Enable X2APIC support!\n");
@@ -548,17 +609,16 @@ check_lapic:
 		lapic_read = lapic_read_msr;
 		lapic_write = lapic_write_msr;
 	} else {
-		page_map(LAPIC_ADDR, (size_t)lapic & PAGE_MASK, 1, PG_GLOBAL | PG_RW | PG_PCD);
-		vma_add(LAPIC_ADDR, LAPIC_ADDR + PAGE_SIZE, VMA_READ | VMA_WRITE);
+		kmap_page((size_t)lapic & PAGE_MASK, LAPIC_ADDR, VMA_RW);
 		lapic = LAPIC_ADDR;
-		kprintf("Map APIC to 0x%x\n", lapic);
+		kprintf("Map Local APIC to 0x%x\n", lapic);
 	}
 
 	kprintf("Maximum LVT Entry: 0x%x\n", apic_lvt_entries());
 	kprintf("APIC Version: 0x%x\n", apic_version());
 
 	if (!((apic_version() >> 4))) {
-		kprintf("Currently, eduOS didn't supports extern APICs!\n");
+		kprintf("Currently, eduOS doesn't support extern APICs!\n");
 		goto out;
 	}
 

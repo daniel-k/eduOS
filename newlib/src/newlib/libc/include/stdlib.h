@@ -180,7 +180,7 @@ char *	_EXFUN(dtoa,(double, int, int, int *, int*, char**));
 char *	_EXFUN(__itoa,(int, char *, int));
 char *	_EXFUN(__utoa,(unsigned, char *, int));
 #ifndef __STRICT_ANSI__
-char *	_EXFUN(itoa,(int, char *, int));
+char *	_EXFUN(itoa2,(int, char *, int));
 char *	_EXFUN(utoa,(unsigned, char *, int));
 int	_EXFUN(rand_r,(unsigned *__seed));
 

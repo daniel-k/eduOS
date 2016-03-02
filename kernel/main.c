@@ -153,8 +153,8 @@ int main(void)
 
 	//vma_dump();
 
-	create_kernel_task(NULL, foo, "foo", NORMAL_PRIO);
-	create_user_task(NULL, "/bin/hello", argv1);
+//	create_kernel_task(NULL, foo, "foo", NORMAL_PRIO);
+//	create_user_task(NULL, "/bin/hello", argv1);
 	//create_user_task(NULL, "/bin/jacobi", argv2);
 	//create_user_task(NULL, "/bin/jacobi", argv2);
 

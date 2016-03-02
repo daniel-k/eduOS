@@ -165,9 +165,18 @@ typedef struct {
 
 int acpi_init();
 
-acpi_rsdp_t* get_acpi_rsdp(void);
-acpi_rsdt_t* get_acpi_rsdt(void);
-acpi_madt_t* get_acpi_madt(void);
+acpi_rsdp_t* acpi_get_rsdp(void);
+acpi_rsdt_t* acpi_get_rsdt(void);
+acpi_madt_t* acpi_get_madt(void);
+
+acpi_madt_io_apic_entry_t**
+acpi_get_madt_io_apics();
+
+acpi_madt_processor_lapic_entry_t**
+acpi_get_madt_processors();
+
+acpi_madt_irq_source_override_entry_t**
+acpi_get_irq_overrides();
 
 #ifdef __cplusplus
 }

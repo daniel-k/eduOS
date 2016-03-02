@@ -44,6 +44,10 @@ acpi_rsdp_t* acpi_rsdp __attribute__ ((section (".data"))) = NULL;
 acpi_rsdt_t* acpi_rsdt __attribute__ ((section (".data"))) = NULL;
 acpi_madt_t* acpi_madt __attribute__ ((section (".data"))) = NULL;
 
+#define MADT_MAX_ENTRIES 10
+static const acpi_madt_processor_lapic_entry_t* madt_processor[MADT_MAX_ENTRIES] = {[0 ... MADT_MAX_ENTRIES - 1] = NULL};
+static const acpi_madt_io_apic_entry_t* madt_io_apic[MADT_MAX_ENTRIES] = {[0 ... MADT_MAX_ENTRIES - 1] = NULL};
+static const acpi_madt_irq_source_override_entry_t* madt_irq_override[MADT_MAX_ENTRIES] = {[0 ... MADT_MAX_ENTRIES - 1] = NULL};
 
 /* Signature of RSDP */
 union {
@@ -161,7 +165,7 @@ parse_madt(acpi_madt_t* madt)
 	if(!madt)
 		return -ENOENT;
 
-	print_acpi_header((acpi_sdt_header_t*) madt);
+//	print_acpi_header((acpi_sdt_header_t*) madt);
 
 	/* Local APIC Address */
 	size_t lapic_addr = madt->lapic_addr;
@@ -175,6 +179,10 @@ parse_madt(acpi_madt_t* madt)
 	acpi_madt_io_apic_entry_t* ioapic_entry;
 	acpi_madt_irq_source_override_entry_t* irq_source_override;
 
+	int processor_count = 0;
+	int io_apic_count = 0;
+	int irq_override_count = 0;
+
 	unsigned int i = 0;
 	while( (__builtin_offsetof(acpi_madt_t, apic_structs) + i) < madt->header.length)
 	{
@@ -186,36 +194,39 @@ parse_madt(acpi_madt_t* madt)
 		case MADT_TYPE_LAPIC:
 			/* Processor Local APIC */
 			processor_entry = (acpi_madt_processor_lapic_entry_t*) entry;
+			madt_processor[processor_count++] = processor_entry;
 
 			// TODO: Use these values instead of printing out
-			kprintf("  Entry 'Processor Local APIC':\n");
-			kprintf("    Processor ID: %u\n", processor_entry->processor_id);
-			kprintf("    APIC ID: %u\n", processor_entry->apic_id);
-			kprintf("    Enabled: %s\n", processor_entry->flags.enabled == 1 ? "yes" : "no");
+//			kprintf("  Entry 'Processor Local APIC':\n");
+//			kprintf("    Processor ID: %u\n", processor_entry->processor_id);
+//			kprintf("    APIC ID: %u\n", processor_entry->apic_id);
+//			kprintf("    Enabled: %s\n", processor_entry->flags.enabled == 1 ? "yes" : "no");
 			break;
 
 		case MADT_TYPE_IOAPIC:
 			/* I/O APIC */
 			ioapic_entry = (acpi_madt_io_apic_entry_t*) entry;
+			madt_io_apic[io_apic_count++] = ioapic_entry;
 
 			// TODO: Use these values instead of printing out
-			kprintf("  Entry 'I/O APIC':\n");
-			kprintf("    I/O APIC ID: %u\n", ioapic_entry->io_apic_id);
-			kprintf("    I/O APIC Address: 0x%x\n", ioapic_entry->io_apic_adr);
-			kprintf("    Global System Interrupt Base: %u\n", ioapic_entry->global_irq_base);
+//			kprintf("  Entry 'I/O APIC':\n");
+//			kprintf("    I/O APIC ID: %u\n", ioapic_entry->io_apic_id);
+//			kprintf("    I/O APIC Address: 0x%x\n", ioapic_entry->io_apic_adr);
+//			kprintf("    Global System Interrupt Base: %u\n", ioapic_entry->global_irq_base);
 			break;
 
 		case MADT_TYPE_INTSRC:
 			/* Interrupt Source Override */
 			irq_source_override = (acpi_madt_irq_source_override_entry_t*) entry;
+			madt_irq_override[irq_override_count++] = irq_source_override;
 
 			// TODO: Use these values instead of printing out
-			kprintf("  Entry 'Interrupt Source Override':\n");
-			kprintf("    Bus: %u\n", irq_source_override->bus);
-			kprintf("    Source: %u\n", irq_source_override->source);
-			kprintf("    Global System Interrupt: %u\n", irq_source_override->global_irq);
-			kprintf("    Polarity: %u\n", irq_source_override->flags.polarity);
-			kprintf("    Trigger Mode: %u\n", irq_source_override->flags.trigger_mode);
+//			kprintf("  Entry 'Interrupt Source Override':\n");
+//			kprintf("    Bus: %u\n", irq_source_override->bus);
+//			kprintf("    Source: %u\n", irq_source_override->source);
+//			kprintf("    Global System Interrupt: %u\n", irq_source_override->global_irq);
+//			kprintf("    Polarity: %u\n", irq_source_override->flags.polarity);
+//			kprintf("    Trigger Mode: %u\n", irq_source_override->flags.trigger_mode);
 			break;
 
 		default:
@@ -278,15 +289,17 @@ parse_rsdt(acpi_rsdt_t* rsdt)
 
 	/* We have to find the MADT, otherwise fail */
 	if(!acpi_madt)
+	{
+		kputs("ACPI table 'MADT' not found!\n");
 		return -ENOENT;
-
+	}
 	return 0;
 }
 
 // ----------------------------------------------------------------------------
 
 acpi_rsdt_t*
-get_acpi_rsdt(void)
+acpi_get_rsdt(void)
 {
 	return acpi_rsdt;
 }
@@ -294,7 +307,7 @@ get_acpi_rsdt(void)
 // ----------------------------------------------------------------------------
 
 acpi_madt_t*
-get_acpi_madt(void)
+acpi_get_madt(void)
 {
 	return acpi_madt;
 }
@@ -302,7 +315,7 @@ get_acpi_madt(void)
 // ----------------------------------------------------------------------------
 
 acpi_rsdp_t*
-get_acpi_rsdp(void)
+acpi_get_rsdp(void)
 {
 	if(acpi_rsdp)
 		return acpi_rsdp;
@@ -319,6 +332,30 @@ get_acpi_rsdp(void)
 
 // ----------------------------------------------------------------------------
 
+acpi_madt_io_apic_entry_t**
+acpi_get_madt_io_apics()
+{
+	return madt_io_apic;
+}
+
+// ----------------------------------------------------------------------------
+
+acpi_madt_processor_lapic_entry_t**
+acpi_get_madt_processors()
+{
+	return madt_processor;
+}
+
+// ----------------------------------------------------------------------------
+
+acpi_madt_irq_source_override_entry_t**
+acpi_get_irq_overrides()
+{
+	return madt_irq_override;
+}
+
+// ----------------------------------------------------------------------------
+
 /*
  * @brief Search ACPI structures and scan for relevant tables
  *
@@ -327,7 +364,7 @@ get_acpi_rsdp(void)
 int
 acpi_init()
 {
-	if(!get_acpi_rsdp())
+	if(!acpi_get_rsdp())
 		return -ENOENT;
 
 	kprintf("Host supports ACPI rev. %u.0\n", acpi_rsdp->revision + 1);

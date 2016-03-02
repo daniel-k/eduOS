@@ -60,7 +60,7 @@ _DEFUN (__itoa, (value, str, base),
 }
 
 char *  
-_DEFUN (itoa, (value, str, base),
+_DEFUN (itoa2, (value, str, base),
         int value _AND
         char *str _AND
         int base)
